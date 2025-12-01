@@ -2,11 +2,11 @@
 ==============================================================================
 Car Parking Sensor Simulation
 ==============================================================================
-Educational example showing:
- - SFML rendering and sound playback
- - Clean code organization
- - MISRA C++ 2008 / 2023 compliance guidelines
- - Safe coding and maintainability practices
+Educational example showing :
+-SFML rendering and sound playback
+- Clean code organization
+- MISRA C++ 2008 / 2023 compliance guidelines
+- Safe coding and maintainability practices
 ==============================================================================
 */
 
@@ -20,6 +20,13 @@ Educational example showing:
 // ===============================
 // Constants
 // ===============================
+std::vector<float> x_positions = { 400.0F, 1500.0F, 400.0F, 1500.0F };
+std::vector<float> y_positions = { 200.0F, 200.0F, 800.0F, 800.0F };
+
+struct ParkingSpot {
+	std::string name;          // empty parking
+	sf::RectangleShape shape;  //vizual
+};
 
 namespace constants {
 	// Window dimensions should be constexpr and have explicit types
@@ -35,7 +42,7 @@ namespace constants {
 	constexpr float DISTANCE_MAX = 100.0F;
 	constexpr float DISTANCE_MIN = 10.0F;
 	constexpr float DISTANCE_DECREASE = 0.5F;
-	constexpr float CAR_SPEED = 300.0F;
+
 	// Thresholds for colors
 	constexpr float WARNING_THRESHOLD = 60.0F;
 	constexpr float DANGER_THRESHOLD = 30.0F;
@@ -63,6 +70,7 @@ static void centerSprite(sf::Sprite& sprite, const sf::RenderWindow& window) {
 		});
 }
 
+
 /**
  * @brief Creates a vector of rectangular parking sensor indicators.
  *
@@ -70,6 +78,7 @@ static void centerSprite(sf::Sprite& sprite, const sf::RenderWindow& window) {
  *        Avoid global mutable data.
  */
 static std::vector<sf::RectangleShape> createSensorIndicators() {
+	
 	std::vector<sf::RectangleShape> sensors;
 	sensors.reserve(constants::SENSOR_COUNT); // Avoid dynamic reallocations
 
@@ -103,8 +112,39 @@ static std::vector<sf::RectangleShape> createSensorIndicators() {
 		}
 
 	}
-
 	return sensors; // Return by value (NRVO applies)
+}
+
+std::array<sf::Vector2f, 4> getCorners(const sf::RectangleShape& r) {
+	const sf::Transform& t = r.getTransform();
+	sf::Vector2f size = r.getSize();
+
+	return {
+		t.transformPoint({0.f,      0.f}),
+		t.transformPoint({size.x,   0.f}),
+		t.transformPoint({size.x,   size.y}),
+		t.transformPoint({0.f,      size.y})
+	};
+}
+bool isCarParked(sf::FloatRect parkingBounds, const std::array<sf::Vector2f, 4>& corners) {
+
+	for (const auto& corner : corners) {
+		if (!parkingBounds.contains(corner)) {
+			return false;
+		}
+	}
+	return true;
+}
+void addParkingSpot(std::vector<ParkingSpot>& spots, const std::string& name, const sf::Vector2f& position, const sf::Vector2f& size = { 360.f, 550.f }, const sf::Color& color = sf::Color(255, 255, 0, 100)) {
+	ParkingSpot spot;
+	spot.name = name;
+
+	spot.shape.setSize(size);
+	spot.shape.setFillColor(color);
+	spot.shape.setOrigin(sf::Vector2f(0.f, 0.f));   //top left corner
+	spot.shape.setPosition(position);
+
+	spots.push_back(spot);
 }
 
 /**
@@ -117,7 +157,7 @@ static std::vector<sf::RectangleShape> createSensorIndicators() {
 	if (!texture.loadFromFile(path)) {
 		std::cerr << "Error: Failed to load texture from "
 			<< std::filesystem::absolute(path) << '\n';
-		// MISRA: Avoid abrupt termination, but here it’s educational
+		// MISRA: Avoid abrupt termination, but here itâ€™s educational
 	}
 	return texture;
 }
@@ -134,43 +174,10 @@ static std::vector<sf::RectangleShape> createSensorIndicators() {
 	return buffer;
 }
 
-static void sensorPositionUpdate(std::vector<sf::RectangleShape>& sensors,
-	const sf::Sprite& car) {
-	const sf::FloatRect carBounds = car.getGlobalBounds();
-	const sf::Vector2f carCenter = car.getPosition();
-
-	// Left rear sensor
-	sensors[0].setRotation(sf::degrees(45.0F));
-	sensors[0].setPosition({
-		carCenter.x - (constants::SENSOR_WIDTH * 16),
-		carBounds.position.y - (constants::SENSOR_HEIGHT)
-		});
-
-	//Left front sensor
-	sensors[1].setRotation(sf::degrees(-45.0F));
-	sensors[1].setPosition({ 
-		carCenter.x + (constants::SENSOR_WIDTH * 16),
-		carBounds.position.y - (constants::SENSOR_HEIGHT)
-		});
-
-	//Rear right sensor
-	sensors[2].setRotation(sf::degrees(135.0F));
-	sensors[2].setPosition({
-		carCenter.x - (constants::SENSOR_WIDTH * 16),
-		carBounds.position.y + (constants::SENSOR_HEIGHT * 5)
-		});
-
-	// Right side sensor
-	sensors[3].setRotation(sf::degrees(-135.0F));
-	sensors[3].setPosition({
-			carCenter.x + (constants::SENSOR_WIDTH * 16),
-		carBounds.position.y + (constants::SENSOR_HEIGHT * 5)
-		});
-}
-
 // ===============================
 // Main Application
 // ===============================
+
 int main() {
 	// ====================================
 	// Window setup
@@ -191,19 +198,26 @@ int main() {
 	sf::Sprite carSprite(carTexture);
 	centerSprite(carSprite, window);
 
-	
-
 	std::vector<sf::RectangleShape> sensors = createSensorIndicators();
 
-	const sf::SoundBuffer beepBuffer = loadSoundOrExit("assets/beep.mp3");
-	sf::Sound beep(beepBuffer);
 	float distance = constants::DISTANCE_MAX;
+	constexpr float edge = 50.0F;
 
+	sf::Vector2f carCenter = carSprite.getPosition();
+	sf::Vector2u windowSize = window.getSize();
+
+	std::vector<sf::Vector2f> sensorOffsets;
+
+	for (std::size_t i = 0; i < constants::SENSOR_COUNT; ++i) {
+		sensorOffsets.push_back({ x_positions[i] - carCenter.x, y_positions[i] - carCenter.y });
+
+	}
+
+	sf::Vector2f scale(0.5f, 0.5f);
+	carSprite.setScale(scale);
 	// ====================================
 	// Main loop
 	// ====================================
-
-	sf::Clock clock;
 
 	while (window.isOpen()) {
 		// ---- Handle events ----
@@ -213,72 +227,124 @@ int main() {
 			}
 		}
 
-
-
 		// ---- Update logic ----
 		distance -= constants::DISTANCE_DECREASE;
 		if (distance < constants::DISTANCE_MIN) {
 			distance = constants::DISTANCE_MAX;
 		}
-		
-		
-		//Movement logic
+		sf::Vector2f movement(0.f, 0.f);
 
-		const float deltaTime = clock.restart().asSeconds();
-		 
-		sf::Vector2f movement{ 0.0F, 0.0F };
-		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::Up)) {
-			movement.y -= constants::CAR_SPEED * deltaTime;
+
+
+
+
+		float rotationSpeed = 1.0f;
+
+		float speed = 7.0f;
+
+		float angleDeg = carSprite.getRotation().asDegrees();
+		float angleRad = angleDeg * 3.14159265f / 180.f;
+
+
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A)) {
+			carSprite.rotate(sf::degrees(-rotationSpeed));
 		}
-		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::S) || sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::Down)) {
-			movement.y += constants::CAR_SPEED * deltaTime;
+
+
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D)) {
+			carSprite.rotate(sf::degrees(rotationSpeed));
 		}
-		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::A) || sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::Left)) {
-			movement.x -= constants::CAR_SPEED * deltaTime;
+
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::W))
+		{
+			movement.x += std::cos(angleRad) * speed;
+			movement.y += std::sin(angleRad) * speed;
 		}
-		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::D) || sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::Right)) {
-			movement.x += constants::CAR_SPEED * deltaTime;
+
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::S))
+		{
+			movement.x -= std::cos(angleRad) * speed;
+			movement.y -= std::sin(angleRad) * speed;
 		}
-		
+
+
+		sf::Vector2f carPos = carSprite.getPosition();
+		for (std::size_t i = 0; i < sensors.size(); ++i) {
+			sensors[i].setPosition(carPos + sensorOffsets[i]);
+		}
+
+
 		carSprite.move(movement);
-		sensorPositionUpdate(sensors, carSprite);
-
-
-		// Determine sensor color based on distance
-		sf::Color sensorColor = sf::Color::Green;
-		if (distance < constants::WARNING_THRESHOLD) {
-			sensorColor = sf::Color::Yellow;
-		}
-		if (distance < constants::DANGER_THRESHOLD) {
-			sensorColor = sf::Color::Red;
-		}
-
-		for (auto& sensor : sensors) {
-			sensor.setFillColor(sensorColor);
-		}
-			
 		
-		// Sound logic (play warning sound when too close)
-		if ((distance < constants::DANGER_THRESHOLD) &&
-			(beep.getStatus() != sf::Sound::Status::Playing)) {
-			beep.play();
-		}
+		std::vector<ParkingSpot> parkingSpots;
+		addParkingSpot(parkingSpots, "Parking1", { 0.f, 0.f });
+		addParkingSpot(parkingSpots, "Parking2", { 800.f, 530.f });
+		addParkingSpot(parkingSpots, "Parking3", { 1560.f, 0.f });
+
+
 
 		// ---- Rendering ----
 		window.clear(sf::Color::Black);
-		window.draw(carSprite);
 
-		for (const auto& sensor : sensors) {
-			window.draw(sensor);
+		sf::RectangleShape carBounds({ carTexture.getSize().x * scale.x, carTexture.getSize().y * scale.y });
+		carBounds.setOrigin(sf::Vector2(carBounds.getSize().x / 2.f, carBounds.getSize().y / 2.f));
+
+		carBounds.setPosition(carSprite.getPosition());
+
+		carBounds.setRotation(sf::degrees(carSprite.getRotation().asDegrees()));
+
+
+		auto corners = getCorners(carBounds);
+		bool parked = false;
+		std::string parkedAt = "";
+
+		for (const auto& spot : parkingSpots) {
+			sf::FloatRect bounds = spot.shape.getGlobalBounds();
+
+			if (isCarParked(bounds, corners)) {
+				parked = true;
+				parkedAt = spot.name;
+				break;
+			}
+		}
+		
+		if (parked) {
+
+			for (auto& spot : parkingSpots) {
+				sf::FloatRect bounds = spot.shape.getGlobalBounds();
+
+				if (isCarParked(bounds, corners)) {
+					if (spot.name == parkedAt) {
+						spot.shape.setFillColor(sf::Color(0, 255, 0, 100));
+					}
+				}
+			}
+		}
+		else {
+			for (auto& spot : parkingSpots) {
+				sf::FloatRect bounds = spot.shape.getGlobalBounds();
+
+				if (!isCarParked(bounds, corners)) {
+					if (spot.name == parkedAt) {
+						spot.shape.setFillColor(sf::Color(255, 255, 0, 100));
+					}
+				}
+			}
 		}
 
+		for (const auto& corner : corners) {
+			sf::CircleShape point(3.f);
+			point.setFillColor(sf::Color::Green);
+			point.setOrigin(sf::Vector2(5.f, 5.f));
+			point.setPosition(corner);
+			window.draw(point);
+		}
+		for (const auto& spot : parkingSpots) {
+			window.draw(spot.shape);
+		}
+		window.draw(carSprite);
 		window.display();
-
-		
-
 	}
 
-	
 	return 0;
 }
-
