@@ -1,32 +1,23 @@
 ﻿/*
 ==============================================================================
-Car Parking Sensor Simulation
+Car Parking Sensor Simulation - Task 2
 ==============================================================================
-Educational example showing :
--SFML rendering and sound playback
-- Clean code organization
-- MISRA C++ 2008 / 2023 compliance guidelines
-- Safe coding and maintainability practices
+Now includes:
+ - Car movement using keyboard
+ - Sensors move relative to car position
+ - Delta-time–based smooth motion
 ==============================================================================
 */
 
 #include <SFML/Graphics.hpp>
-#include <SFML/Audio.hpp>
 #include <iostream>
-#include <vector>
-#include <string>
-#include <filesystem>
+#include <SFML/Audio.hpp>
+
+
 
 // ===============================
 // Constants
 // ===============================
-std::vector<float> x_positions = { 400.0F, 1500.0F, 400.0F, 1500.0F };
-std::vector<float> y_positions = { 200.0F, 200.0F, 800.0F, 800.0F };
-
-struct ParkingSpot {
-	std::string name;          // empty parking
-	sf::RectangleShape shape;  //vizual
-};
 
 namespace constants {
 	// Window dimensions should be constexpr and have explicit types
@@ -39,15 +30,22 @@ namespace constants {
 
 	// Simulation and layout
 	constexpr std::size_t SENSOR_COUNT = 4U;
-	constexpr float DISTANCE_MAX = 100.0F;
-	constexpr float DISTANCE_MIN = 10.0F;
-	constexpr float DISTANCE_DECREASE = 0.5F;
+	constexpr float CAR_SPEED = 500.0F; // pixels per second
+	constexpr float CAR_ROTATION_SPEED = 2.5F;
 
 	// Thresholds for colors
 	constexpr float WARNING_THRESHOLD = 60.0F;
 	constexpr float DANGER_THRESHOLD = 30.0F;
 
+	float PI = 3.14;
+
+	//THE COLORS OF THE PARKING INDICATOR; TRANSPARENT GREEN AND TRANSPARENT RED
+	const sf::Color transGreen = sf::Color(0, 255, 0, 100);
+	const sf::Color transRed = sf::Color(255, 0, 0, 100);
+
+
 }
+
 
 // ===============================
 // Utility Functions
@@ -70,6 +68,48 @@ static void centerSprite(sf::Sprite& sprite, const sf::RenderWindow& window) {
 		});
 }
 
+static float distance(const sf::Vector2f& a, const sf::Vector2f& b) {
+	const float dx = b.x - a.x;
+	const float dy = b.y - a.y;
+	return std::sqrt(dx * dx + dy * dy);
+}
+
+static void playBeepIfNear(const std::vector<sf::RectangleShape>& sensors,
+	const std::vector<sf::CircleShape>& stupovi,
+	sf::Sound& beepSound,
+	sf::Clock& beepClock)
+{
+	const float timeSinceLastBeep = beepClock.getElapsedTime().asSeconds();
+	float closestDist = std::numeric_limits<float>::max();
+
+	for (const auto& sensor : sensors) {
+		const sf::Vector2f sensorPos = sensor.getPosition();
+		for (const auto& stup : stupovi) {
+			float dist = distance(sensorPos, stup.getPosition());
+			if (dist < closestDist) {
+				closestDist = dist;
+			}
+		}
+	}
+
+	float interval = 0.0f;
+
+	if (closestDist <= 80.0f) {
+		interval = 0.1f;
+	}
+	else if (closestDist <= 180.0f) {
+		interval = 0.25f;
+	}
+	else if (closestDist <= 300.0f) {
+		interval = 0.5f;
+	}
+
+	if (timeSinceLastBeep >= interval) {
+		beepSound.play();
+		beepClock.restart();
+	}
+}
+
 
 /**
  * @brief Creates a vector of rectangular parking sensor indicators.
@@ -78,73 +118,21 @@ static void centerSprite(sf::Sprite& sprite, const sf::RenderWindow& window) {
  *        Avoid global mutable data.
  */
 static std::vector<sf::RectangleShape> createSensorIndicators() {
-	
 	std::vector<sf::RectangleShape> sensors;
 	sensors.reserve(constants::SENSOR_COUNT); // Avoid dynamic reallocations
 
-	sf::Angle buttonAngle = sf::degrees(135);
-	sf::Angle buttonAngle2 = sf::degrees(90);
-
-	sf::Angle topAngle = sf::degrees(45);
-	sf::Angle topAngle2 = sf::degrees(90);
-
-	constexpr float START_X = 400.0F;
+	constexpr float START_X = 800.0F;
 	constexpr float START_Y = 200.0F;
-	constexpr float SPACING = 1100.0F;
-	constexpr float START_Y2 = 800.0F;
-
+	constexpr float SPACING = 100.0F;
 
 	for (std::size_t i = 0U; i < constants::SENSOR_COUNT; ++i) {
 		sf::RectangleShape sensor({ constants::SENSOR_WIDTH, constants::SENSOR_HEIGHT });
 		sensor.setFillColor(sf::Color::Green);
-
-		if (i >= 2) {
-			sensor.setPosition({ START_X + ((static_cast<float>(i) - 2) * SPACING), START_Y2 });
-			buttonAngle = buttonAngle - buttonAngle2;
-			sensor.setRotation(buttonAngle - buttonAngle2);
-			sensors.push_back(sensor);
-		}
-		else {
-			sensor.setPosition({ START_X + (static_cast<float>(i) * SPACING), START_Y });
-			topAngle = topAngle - topAngle2;
-			sensor.setRotation(topAngle - topAngle2);
-			sensors.push_back(sensor);
-		}
-
+		sensor.setPosition({ START_X + (static_cast<float>(i) * SPACING), START_Y });
+		sensors.push_back(sensor);
 	}
+
 	return sensors; // Return by value (NRVO applies)
-}
-
-std::array<sf::Vector2f, 4> getCorners(const sf::RectangleShape& r) {
-	const sf::Transform& t = r.getTransform();
-	sf::Vector2f size = r.getSize();
-
-	return {
-		t.transformPoint({0.f,      0.f}),
-		t.transformPoint({size.x,   0.f}),
-		t.transformPoint({size.x,   size.y}),
-		t.transformPoint({0.f,      size.y})
-	};
-}
-bool isCarParked(sf::FloatRect parkingBounds, const std::array<sf::Vector2f, 4>& corners) {
-
-	for (const auto& corner : corners) {
-		if (!parkingBounds.contains(corner)) {
-			return false;
-		}
-	}
-	return true;
-}
-void addParkingSpot(std::vector<ParkingSpot>& spots, const std::string& name, const sf::Vector2f& position, const sf::Vector2f& size = { 360.f, 550.f }, const sf::Color& color = sf::Color(255, 255, 0, 100)) {
-	ParkingSpot spot;
-	spot.name = name;
-
-	spot.shape.setSize(size);
-	spot.shape.setFillColor(color);
-	spot.shape.setOrigin(sf::Vector2f(0.f, 0.f));   //top left corner
-	spot.shape.setPosition(position);
-
-	spots.push_back(spot);
 }
 
 /**
@@ -157,22 +145,75 @@ void addParkingSpot(std::vector<ParkingSpot>& spots, const std::string& name, co
 	if (!texture.loadFromFile(path)) {
 		std::cerr << "Error: Failed to load texture from "
 			<< std::filesystem::absolute(path) << '\n';
-		// MISRA: Avoid abrupt termination, but here itâ€™s educational
+		// MISRA: Avoid abrupt termination, but here it’s educational
 	}
 	return texture;
 }
 
-/**
- * @brief Loads a sound buffer safely and logs any error.
- */
-[[nodiscard]] static sf::SoundBuffer loadSoundOrExit(const std::string& path) {
-	sf::SoundBuffer buffer;
-	if (!buffer.loadFromFile(path)) {
-		std::cerr << "Error: Failed to load sound from "
-			<< std::filesystem::absolute(path) << '\n';
-	}
-	return buffer;
+
+
+static void updateSensorPositions(std::vector<sf::RectangleShape>& sensors,
+	const sf::Sprite& car)
+{
+	const sf::FloatRect carBounds = car.getGlobalBounds();
+	const sf::Vector2f carCenter = car.getPosition();
+
+
+	constexpr float SENSOR_HALF_WIDTH = constants::SENSOR_WIDTH / 2.0F;
+	constexpr float SENSOR_LENGTH = constants::SENSOR_HEIGHT;
+
+
+	constexpr float DIAGONAL_OFFSET = 10.0F;
+
+
+	sensors[0].setRotation(sf::degrees(45.0F));
+
+	sensors[0].setPosition({
+		carBounds.position.x - SENSOR_HALF_WIDTH - DIAGONAL_OFFSET,
+		carBounds.position.y - SENSOR_LENGTH + SENSOR_HALF_WIDTH - DIAGONAL_OFFSET
+		});
+
+
+	sensors[1].setRotation(sf::degrees(315.0F));
+
+	sensors[1].setPosition({
+		carBounds.position.x + carBounds.size.x + SENSOR_HALF_WIDTH + DIAGONAL_OFFSET,
+		carBounds.position.y - SENSOR_HALF_WIDTH - DIAGONAL_OFFSET
+		});
+
+
+	sensors[2].setRotation(sf::degrees(135.0F));
+
+	sensors[2].setPosition({
+		carBounds.position.x - SENSOR_HALF_WIDTH - DIAGONAL_OFFSET,
+		carBounds.position.y + carBounds.size.y + SENSOR_HALF_WIDTH + DIAGONAL_OFFSET
+		});
+
+
+	sensors[3].setRotation(sf::degrees(225.0F));
+
+	sensors[3].setPosition({
+		carBounds.position.x + carBounds.size.x + SENSOR_HALF_WIDTH + DIAGONAL_OFFSET,
+		carBounds.position.y + carBounds.size.y + SENSOR_HALF_WIDTH + DIAGONAL_OFFSET
+		});
 }
+
+// FUNC TO HANDLE THE PARK INDICATOR
+static bool parkOccupied(const sf::FloatRect& carBounds, const sf::FloatRect& parkBounds) {
+	const bool isLeftInside = carBounds.position.x >= parkBounds.position.x;
+
+	const bool isRightInside = (carBounds.position.x + carBounds.size.x)
+		<= (parkBounds.position.x + parkBounds.size.x);
+
+	const bool isTopInside = carBounds.position.y >= parkBounds.position.y;
+
+	const bool isBottomInside = (carBounds.position.y + carBounds.size.y)
+		<= (parkBounds.position.y + parkBounds.size.y);
+
+	return isLeftInside && isRightInside && isTopInside && isBottomInside;
+}
+
+
 
 // ===============================
 // Main Application
@@ -182,167 +223,191 @@ int main() {
 	// ====================================
 	// Window setup
 	// ====================================
+	sf::SoundBuffer beepBuffer;
+	beepBuffer.loadFromFile("assets/beep.mp3");
+	sf::Sound beepSound(beepBuffer);
+	sf::Music beepMusic;
+
+	if (!beepMusic.openFromFile("assets/beep.mp3")) {
+		std::cerr << "NEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE\n";
+	}
 
 	sf::RenderWindow window(
 		sf::VideoMode({ constants::WINDOW_WIDTH, constants::WINDOW_HEIGHT }),
-		"Car Parking Sensor Simulation",
+		"Car Parking Sensor Simulation - Task 2",
 		sf::State::Windowed
 	);
 	window.setFramerateLimit(60U);
+
+	sf::Clock beepClock;
+
+
+
+	std::vector<sf::CircleShape> stupovi;
+	std::vector<sf::Vector2f> pozicije = {
+		{800.f, 500.f},
+		{1550.f, 800.f},
+		{1810.f, 800.f}
+	};
+
+	for (const auto& poz : pozicije) {
+		sf::CircleShape stup;
+		stup.setRadius(25.f);
+		stup.setFillColor(sf::Color::White);
+		stup.setPosition(poz);
+		stupovi.push_back(stup);
+	}
 
 	// ====================================
 	// Resource setup
 	// ====================================
 
+	// --- SCALING DOWN THE SPRITE ---
+	float SCALE_DOWN_FACTOR = 0.30F; // Scale to 15% of original size
+
+
 	const sf::Texture carTexture = loadTextureOrExit("assets/car_background.png");
 	sf::Sprite carSprite(carTexture);
+
+
+
+
+	// Apply the scaling using setScale()
+
+	carSprite.scale({ SCALE_DOWN_FACTOR, SCALE_DOWN_FACTOR });
+
+
 	centerSprite(carSprite, window);
-
+	carSprite.setPosition(sf::Vector2f(250, 250));
 	std::vector<sf::RectangleShape> sensors = createSensorIndicators();
+	updateSensorPositions(sensors, carSprite);
 
-	float distance = constants::DISTANCE_MAX;
-	constexpr float edge = 50.0F;
 
-	sf::Vector2f carCenter = carSprite.getPosition();
-	sf::Vector2u windowSize = window.getSize();
+	//PARK SENSOR - consts
+	constexpr float parkWidth = 200.0F;
+	constexpr float parkHeight = 350.0F;
+	constexpr float margin = 10.0F;
 
-	std::vector<sf::Vector2f> sensorOffsets;
+	//Set height/witdh, color and border thickness of the parking indicator
+	sf::RectangleShape parkIndicator({ parkWidth, parkHeight });
+	parkIndicator.setFillColor(constants::transGreen);
+	parkIndicator.setOutlineColor(sf::Color::White);
+	parkIndicator.setOutlineThickness(2.0F);
 
-	for (std::size_t i = 0; i < constants::SENSOR_COUNT; ++i) {
-		sensorOffsets.push_back({ x_positions[i] - carCenter.x, y_positions[i] - carCenter.y });
+	//Draw the park indicator
+	parkIndicator.setPosition({ static_cast<float>(constants::WINDOW_WIDTH) - parkWidth - margin, margin });
 
-	}
 
-	sf::Vector2f scale(0.5f, 0.5f);
-	carSprite.setScale(scale);
+
 	// ====================================
 	// Main loop
 	// ====================================
+	sf::Clock clock;
 
 	while (window.isOpen()) {
+		const float deltaTime = clock.restart().asSeconds();
+
+		// Movement logic
+		sf::Vector2f movement{ 0.0F, 0.0F };
+
+		float rotationChange = 0.0F;
+
 		// ---- Handle events ----
 		while (auto event = window.pollEvent()) {
 			if (event->is<sf::Event::Closed>()) {
 				window.close();
 			}
+
+			// Window closed or escape key pressed: exit
+			if ((event->is<sf::Event::KeyPressed>() &&
+				event->getIf<sf::Event::KeyPressed>()->code == sf::Keyboard::Key::Space))
+				std::cout << "KeyPressed event has occured, key pressed is: Space\n";
 		}
 
-		// ---- Update logic ----
-		distance -= constants::DISTANCE_DECREASE;
-		if (distance < constants::DISTANCE_MIN) {
-			distance = constants::DISTANCE_MAX;
-		}
-		sf::Vector2f movement(0.f, 0.f);
+		// ---- Update logic ---
+
+		sf::Angle rotation;
 
 
+		float currentRotationDeg = carSprite.getRotation().asDegrees();
+		float currentRotationRad = currentRotationDeg * (constants::PI / 180.0F);
+
+		const float forwardX = cos(currentRotationRad);
+		const float forwardY = sin(currentRotationRad);
 
 
+		const float distancePerFrame = constants::CAR_SPEED * deltaTime;
 
-		float rotationSpeed = 1.0f;
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::Up)) {
 
-		float speed = 7.0f;
-
-		float angleDeg = carSprite.getRotation().asDegrees();
-		float angleRad = angleDeg * 3.14159265f / 180.f;
-
-
-		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A)) {
-			carSprite.rotate(sf::degrees(-rotationSpeed));
-		}
-
-
-		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D)) {
-			carSprite.rotate(sf::degrees(rotationSpeed));
-		}
-
-		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::W))
-		{
-			movement.x += std::cos(angleRad) * speed;
-			movement.y += std::sin(angleRad) * speed;
-		}
-
-		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::S))
-		{
-			movement.x -= std::cos(angleRad) * speed;
-			movement.y -= std::sin(angleRad) * speed;
+			movement.x += forwardX * distancePerFrame;
+			movement.y += forwardY * distancePerFrame;
 		}
 
 
-		sf::Vector2f carPos = carSprite.getPosition();
-		for (std::size_t i = 0; i < sensors.size(); ++i) {
-			sensors[i].setPosition(carPos + sensorOffsets[i]);
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::S) || sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::Down)) {
+			movement.x -= forwardX * distancePerFrame;
+			movement.y -= forwardY * distancePerFrame;
+
+			//movement -= forward * (constants::CAR_SPEED * deltaTime);
+		}
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::A) || sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::Left)) {
+			rotation = sf::degrees(-constants::CAR_ROTATION_SPEED);
+
+		}
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::D) || sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::Right)) {
+			rotation = sf::degrees(constants::CAR_ROTATION_SPEED);
 		}
 
-
+		carSprite.rotate(rotation);
 		carSprite.move(movement);
-		
-		std::vector<ParkingSpot> parkingSpots;
-		addParkingSpot(parkingSpots, "Parking1", { 0.f, 0.f });
-		addParkingSpot(parkingSpots, "Parking2", { 800.f, 530.f });
-		addParkingSpot(parkingSpots, "Parking3", { 1560.f, 0.f });
+
+		updateSensorPositions(sensors, carSprite);
+		playBeepIfNear(sensors, stupovi, beepSound, beepClock);
 
 
 
-		// ---- Rendering ----
-		window.clear(sf::Color::Black);
-
-		sf::RectangleShape carBounds({ carTexture.getSize().x * scale.x, carTexture.getSize().y * scale.y });
-		carBounds.setOrigin(sf::Vector2(carBounds.getSize().x / 2.f, carBounds.getSize().y / 2.f));
-
-		carBounds.setPosition(carSprite.getPosition());
-
-		carBounds.setRotation(sf::degrees(carSprite.getRotation().asDegrees()));
-
-
-		auto corners = getCorners(carBounds);
-		bool parked = false;
-		std::string parkedAt = "";
-
-		for (const auto& spot : parkingSpots) {
-			sf::FloatRect bounds = spot.shape.getGlobalBounds();
-
-			if (isCarParked(bounds, corners)) {
-				parked = true;
-				parkedAt = spot.name;
-				break;
-			}
-		}
-		
-		if (parked) {
-
-			for (auto& spot : parkingSpots) {
-				sf::FloatRect bounds = spot.shape.getGlobalBounds();
-
-				if (isCarParked(bounds, corners)) {
-					if (spot.name == parkedAt) {
-						spot.shape.setFillColor(sf::Color(0, 255, 0, 100));
-					}
-				}
-			}
+		// ---- Optional logic ----
+		if (sensors[0].getPosition().y <= 0) {
+			sensors[0].setFillColor(sf::Color::Red);
 		}
 		else {
-			for (auto& spot : parkingSpots) {
-				sf::FloatRect bounds = spot.shape.getGlobalBounds();
-
-				if (!isCarParked(bounds, corners)) {
-					if (spot.name == parkedAt) {
-						spot.shape.setFillColor(sf::Color(255, 255, 0, 100));
-					}
-				}
-			}
+			sensors[0].setFillColor(sf::Color::Green);
+		}
+		if (sensors[2].getPosition().x <= (constants::SENSOR_HEIGHT)) {
+			sensors[2].setFillColor(sf::Color::Red);
+		}
+		else {
+			sensors[2].setFillColor(sf::Color::Green);
 		}
 
-		for (const auto& corner : corners) {
-			sf::CircleShape point(3.f);
-			point.setFillColor(sf::Color::Green);
-			point.setOrigin(sf::Vector2(5.f, 5.f));
-			point.setPosition(corner);
-			window.draw(point);
-		}
-		for (const auto& spot : parkingSpots) {
-			window.draw(spot.shape);
-		}
+		// ---- Rendering ----
+		window.clear(sf::Color(30, 30, 30));
 		window.draw(carSprite);
+
+		//DRAW THE PARK INDICATOR
+		window.draw(parkIndicator);
+
+		//PARKING INDICATION - GET LOCATION OF THE CAR AND THE INDICATOR
+		const sf::FloatRect carBounds = carSprite.getGlobalBounds();
+		const sf::FloatRect parkBounds = parkIndicator.getGlobalBounds();
+
+		//CHANGE COLOR OF PARK INDICATOR; ON OCCUPATION
+		if (parkOccupied(carBounds, parkBounds)) {
+			parkIndicator.setFillColor(constants::transRed);
+		}
+		else {
+			parkIndicator.setFillColor(constants::transGreen);
+		}
+
+
+		//UNCOMMENT IF YOU NEED TO HAVE PARK SENSORS AROUND THE CAR
+		//for (const auto& sensor : sensors) {
+			//window.draw(sensor);
+		//}
+		for (auto& s : stupovi) {
+			window.draw(s);
+		}
 		window.display();
 	}
 
